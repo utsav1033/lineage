@@ -1,0 +1,679 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lineage</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+<style>
+  :root {
+    --bg: #ffffff; --ink: #18181b; --muted: #8a8a90; --faint: #ececee;
+    --accent: #c2410c; --good: #15803d; --warn: #b45309; --bad: #b91c1c; --hl-l: .62; --imgbg: transparent; --imgpad: 0px;
+    --serif: "Source Serif 4", Georgia, serif; --sans: "Inter", system-ui, sans-serif;
+    --col: 640px; --note: 250px; --gap: 48px;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0b0b0c; --ink: #e4e4e7; --muted: #71717a; --faint: #1f1f23;
+      --accent: #fb923c; --good: #4ade80; --warn: #fbbf24; --bad: #f87171; --hl-l: .76; --imgbg: #f4f4f5; --imgpad: 10px;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0b0b0c; --ink: #e4e4e7; --muted: #71717a; --faint: #1f1f23;
+    --accent: #fb923c; --good: #4ade80; --warn: #fbbf24; --bad: #f87171; --hl-l: .76; --imgbg: #f4f4f5; --imgpad: 10px;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--ink); }
+  body { font: 15px/1.5 var(--sans); -webkit-font-smoothing: antialiased; }
+  button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; padding: 0; }
+  ::selection { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+  .sc { font: 500 11px var(--sans); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+
+  /* Top strip: barely there */
+  .strip { position: fixed; inset: 0 0 auto 0; z-index: 5; display: flex; gap: 16px; align-items: center;
+           padding: 12px 20px; font-size: 12px; color: var(--muted);
+           background: linear-gradient(var(--bg) 60%, transparent); }
+  .strip .trail { flex: 1; min-width: 0; display: flex; justify-content: center; gap: 6px; white-space: nowrap; overflow: hidden; }
+  .strip .trail button { color: var(--muted); overflow: hidden; text-overflow: ellipsis; max-width: 240px; }
+  .strip .trail button.cur { color: var(--ink); }
+  .strip a, .strip button { color: var(--muted); }
+  .strip a:hover, .strip button:hover { color: var(--ink); }
+  .word { font: 600 13px var(--sans); color: var(--ink) !important; }
+  .word i { font-style: normal; color: var(--accent); }
+
+  /* Home: a title page */
+  #home { min-height: 100vh; display: grid; place-items: center; padding: 16px; text-align: center; }
+  #home .box { width: min(560px, 100%); }
+  #home h1 { font: 400 52px/1.1 var(--serif); letter-spacing: -0.02em; margin: 0 0 10px; }
+  #home h1 i { font-style: normal; color: var(--accent); }
+  #home .sub { font: italic 18px var(--serif); color: var(--muted); margin-bottom: 44px; }
+  #home form { display: flex; border-bottom: 1px solid var(--muted); max-width: 420px; margin: 0 auto; }
+  #home input { flex: 1; min-width: 0; font: 400 17px var(--serif); text-align: center; background: none; border: 0;
+                outline: 0; color: var(--ink); padding: 10px 0; }
+  #home input::placeholder { color: var(--muted); font-style: italic; }
+  .examples { margin-top: 22px; font: 14px var(--serif); color: var(--muted); }
+  .examples button { color: var(--ink); font-style: italic; border-bottom: 1px dotted var(--muted); margin: 0 6px; }
+  .examples button:hover { color: var(--accent); }
+
+  /* Reader: one centered column, notes hang in both margins */
+  #reader { display: none; padding: 96px 16px 160px; }
+  .page { position: relative; max-width: var(--col); margin: 0 auto; }
+  .col-l, .col-r { position: absolute; top: 0; width: var(--note); }
+  .col-l { right: calc(100% + var(--gap)); }
+  .col-r { left: calc(100% + var(--gap)); }
+  article { font: 400 17.5px/1.72 var(--serif); text-align: justify; hyphens: auto; -webkit-hyphens: auto; }
+  article .title { font: 600 34px/1.18 var(--serif); letter-spacing: -0.015em; text-align: center; margin: 0 0 14px; hyphens: manual; }
+  article .byline { text-align: center; margin-bottom: 56px; }
+  article h2 { font: 600 12px/1.4 var(--sans); letter-spacing: .12em; text-transform: uppercase; margin: 48px 0 14px;
+               text-align: left; }
+  article h2.abstract { text-align: center; }
+  article p.abstract { font-size: 16px; margin-left: 36px; margin-right: 36px; }
+  article p { margin: 0 0 16px; text-indent: 0; }
+  article h2 + p, article p.eq + p { text-indent: 0; }
+  article sup.ref { font: 500 10px var(--sans); color: var(--muted); cursor: help; padding: 0 1px; }
+  article .flash { background: color-mix(in srgb, var(--accent) 14%, transparent); border-radius: 3px; transition: background 2s; }
+  article p, article h2, article figure { cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='30' height='30'%3E%3Cpath d='M5 5h6M8 5v18M5 23h6' stroke='%23fff' stroke-width='3.5' fill='none'/%3E%3Cpath d='M5 5h6M8 5v18M5 23h6' stroke='%23333' stroke-width='1.5' fill='none'/%3E%3Ccircle cx='20' cy='8' r='6.5' fill='%23ea7a3a'/%3E%3Ctext x='20' y='11.6' font-size='10' font-family='Arial' font-weight='700' text-anchor='middle' fill='%23fff'%3E%3F%3C/text%3E%3C/svg%3E") 8 14, text; }
+  math { font-size: 1.06em; }
+  math[display="block"] { display: block math; margin: 12px 0; overflow-x: auto; overflow-y: hidden; }
+  p.eq { display: flex; align-items: center; gap: 16px; color: var(--muted); text-align: center; }
+  p.eq math { flex: 1; min-width: 0; color: var(--ink); }
+  .katex { font-size: 1em; }
+
+  /* Figures and tables */
+  figure.fig { margin: 40px 0; }
+  figure.fig .media { display: flex; flex-wrap: wrap; gap: 20px; justify-content: center; align-items: flex-end; }
+  figure.fig img { max-width: 100%; max-height: 440px; height: auto; border-radius: 4px;
+                   background: var(--imgbg); padding: var(--imgpad); }
+  figure.fig figcaption, p.figcap { font-size: 14.5px; line-height: 1.55; margin: 14px 0; text-align: left; }
+  .fignum { font: 600 11px var(--sans); letter-spacing: .1em; text-transform: uppercase; margin-right: 4px; }
+  .tbl { overflow-x: auto; text-align: center; }
+  .tbl table { border-collapse: collapse; margin: 0 auto; font-size: 13.5px; line-height: 1.4;
+               font-variant-numeric: tabular-nums; text-align: center; }
+  .tbl td, .tbl th { padding: 4px 10px; white-space: nowrap; }
+  .tbl .ltx_border_t { border-top: 1px solid var(--muted); }
+  .tbl .ltx_border_b { border-bottom: 1px solid var(--muted); }
+  .tbl .ltx_border_tt { border-top: 1.5px solid var(--ink); }
+  .tbl .ltx_border_bb { border-bottom: 1.5px solid var(--ink); }
+  .tbl .ltx_border_r { border-right: 1px solid var(--faint); }
+  .tbl .ltx_border_l { border-left: 1px solid var(--faint); }
+  .tbl .ltx_align_left { text-align: left; } .tbl .ltx_align_right { text-align: right; }
+  .tbl .ltx_font_bold { font-weight: 600; }
+
+  /* Highlights: each note gets its own hue; dim until hovered */
+  mark.hl { background: none; color: inherit; text-decoration: underline;
+            text-decoration-color: color-mix(in oklch, var(--c) 45%, transparent);
+            text-decoration-thickness: 1.5px; text-underline-offset: 4px; text-decoration-skip-ink: none;
+            transition: text-decoration-color .2s, background-color .2s; border-radius: 2px; cursor: pointer; }
+  mark.hl math { box-shadow: inset 0 -1.5px color-mix(in oklch, var(--c) 45%, transparent); }
+  mark.hl.on math { box-shadow: inset 0 -2.5px var(--c); }
+  mark.hl.on { text-decoration-color: var(--c); text-decoration-thickness: 2.5px;
+               background-color: color-mix(in oklch, var(--c) 13%, transparent); }
+  sup.nref { font: 600 10px var(--sans); color: var(--c); padding-left: 1px; cursor: pointer; }
+
+  /* Notes */
+  /* Notes stay fully visible; only the highlight in the text dims and brightens on hover. */
+  .note { position: absolute; width: var(--note); transition: top .25s;
+          font: 14px/1.55 var(--serif); padding-left: 12px; border-left: 1.5px solid var(--c); }
+  .note .lab { font: 600 10px var(--sans); letter-spacing: .12em; text-transform: uppercase; color: var(--c);
+               display: flex; gap: 6px; align-items: center; margin-bottom: 4px; }
+  .note .lab .x { margin-left: auto; color: var(--muted); font-size: 13px; opacity: 0; letter-spacing: 0; }
+  .note:hover .lab .x { opacity: 1; }
+  .note .cost { font: 11px var(--sans); color: var(--muted); margin-top: 6px; }
+  .progress { font: 12px var(--sans); color: var(--muted); }
+  .progress .live::after { content: "…"; animation: blink 1s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .err { color: var(--bad); font: 12px var(--sans); }
+  .narrow .note { position: static; width: auto; margin: -4px 0 18px; text-align: left; }
+
+  /* Lineage tree, compact */
+  .tree .kids { margin-left: 3px; padding-left: 10px; border-left: 1px solid var(--faint); }
+  .tree .n { margin-top: 10px; }
+  .tree .t { font: 500 13px/1.35 var(--sans); text-align: left; }
+  .tree .t:hover { color: var(--c); }
+  .tree .yr { font: 11px var(--sans); color: var(--muted); margin-right: 4px; font-variant-numeric: tabular-nums; }
+  .tree .meta { font: 11px var(--sans); color: var(--muted); margin-top: 2px; }
+  .tree .q { font-style: italic; font-size: 13px; margin-top: 4px; }
+  .tree .ex { font-size: 13px; margin-top: 4px; }
+  .v-yes { color: var(--good); } .v-partial { color: var(--warn); } .v-no { color: var(--bad); }
+  .ans p { margin: 0 0 8px; }
+  sup.fn { font: 600 9.5px var(--sans); color: var(--c); padding: 0 1px; cursor: pointer; }
+  sup.fn.unv { opacity: .45; }
+  sup.fnsep { font: 9.5px var(--sans); color: var(--muted); }
+  .gap { font-style: italic; color: var(--muted); font-size: 13px; margin: 6px 0; }
+  .srcs { list-style: none; padding: 0; margin: 10px 0 0; font: 11.5px/1.4 var(--sans); }
+  .srcs li { display: flex; gap: 6px; margin-top: 4px; }
+  .srcs .sn { color: var(--c); font-weight: 600; min-width: 10px; }
+  .srcs button { text-align: left; }
+  .srcs button:hover { color: var(--c); }
+  /* Sketches */
+  .sk-cap { font-style: italic; font-size: 13px; color: var(--muted); margin-top: 6px; }
+
+  /* Play */
+  #pill button.hot { color: color-mix(in srgb, var(--accent) 70%, var(--bg)); font-weight: 600; }
+  /* The frame inherits the page's color-scheme; a mismatch makes the browser paint an opaque backdrop behind it. */
+  iframe.toy { display: block; width: 100%; height: 0; border: 0; background: transparent; }
+  .toy-host { margin-top: 4px; transition: opacity .3s; }
+  .toy-host.testing { opacity: .25; pointer-events: none; }
+  .narrow .toy-host { max-width: 420px; }
+  .toy-hint { font: 12.5px/1.45 var(--sans); margin-top: 8px; padding-left: 14px; position: relative; }
+  .toy-hint::before { content: "↳"; position: absolute; left: 0; color: var(--c); }
+  .toy-hint:empty { display: none; }
+  .toy-foot { display: flex; gap: 10px; align-items: baseline; margin-top: 8px; font: 11px var(--sans); color: var(--muted); }
+  .toy-foot button { color: var(--muted); text-decoration: underline; text-decoration-color: var(--faint); text-underline-offset: 3px; }
+  .toy-foot button:hover { color: var(--ink); }
+  .toy-foot .toy-cost { margin-left: auto; }
+  .toy-src { font: 11px/1.5 ui-monospace, "SF Mono", Menlo, monospace; background: color-mix(in srgb, var(--ink) 5%, transparent);
+             padding: 8px 10px; border-radius: 6px; max-height: 260px; overflow: auto; white-space: pre; margin: 8px 0 0; }
+  #stage { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; padding: 16px;
+           background: color-mix(in srgb, var(--bg) 70%, transparent); backdrop-filter: blur(6px); }
+  #stage[hidden] { display: none; }
+  .stage-box { position: relative; width: min(600px, 100%); max-height: 92vh; overflow: auto; background: var(--bg);
+               border: 1px solid var(--faint); border-radius: 12px; padding: 22px 26px 20px; box-shadow: 0 20px 60px rgba(0,0,0,.25); }
+  .stage-sel { font: italic 15px/1.5 var(--serif); color: var(--muted); border-left: 2px solid var(--c); padding-left: 10px; margin: 0 24px 14px 0; }
+  .stage-frame { min-height: 300px; }  /* holds the space while the toy boots */
+  .stage-x { position: absolute; top: 12px; right: 16px; font-size: 20px; color: var(--muted); }
+  .stage-x:hover { color: var(--ink); }
+  #tip { position: fixed; z-index: 20; display: none; max-width: 320px; pointer-events: none; background: var(--bg);
+         border: 1px solid var(--faint); border-radius: 6px; padding: 9px 11px; box-shadow: 0 8px 24px rgba(0,0,0,.18);
+         font: italic 13.5px/1.5 var(--serif); }
+  #tip .ts { font: normal 11px var(--sans); color: var(--muted); margin-top: 6px; }
+  .unres { font: 11px var(--sans); color: var(--muted); margin-top: 6px; }
+
+  /* Selection pill + cursor hint */
+  #pill { position: absolute; z-index: 10; display: none; background: var(--ink); color: var(--bg);
+          border-radius: 999px; padding: 5px 4px; font: 12.5px var(--sans); box-shadow: 0 4px 16px rgba(0,0,0,.18); }
+  #pill button { padding: 2px 11px; }
+  #pill button + button { border-left: 1px solid color-mix(in srgb, var(--bg) 30%, transparent); }
+  #hint { position: fixed; z-index: 9; pointer-events: none; font: italic 13px var(--serif); color: var(--muted);
+          background: var(--bg); padding: 2px 8px; border-radius: 4px; border: 1px solid var(--faint);
+          opacity: 0; transition: opacity .25s; white-space: nowrap; }
+  #hint.show { opacity: 1; }
+
+  @media (max-width: 700px) {
+    article { font-size: 17px; text-align: left; }
+    article .title { font-size: 27px; }
+    article p.abstract { margin: 0 0 16px; }
+    #home h1 { font-size: 40px; }
+  }
+</style>
+</head>
+<body>
+
+<section id="home">
+  <div class="box">
+    <div class="sc" style="margin-bottom:26px">An annotated reader for arXiv</div>
+    <h1>lineage<i>.</i></h1>
+    <div class="sub">Read a paper. Ask what anything means, and where it came from.</div>
+    <form id="go"><input id="q" placeholder="paste an arXiv link or ID" autocomplete="off" autofocus></form>
+    <div class="examples">e.g.
+      <button data-id="1706.03762">Attention Is All You Need</button>
+      <button data-id="2106.09685">LoRA</button>
+      <button data-id="2201.11903">Chain-of-Thought</button>
+    </div>
+  </div>
+</section>
+
+<section id="reader">
+  <div class="strip">
+    <button class="word" id="home-btn">lineage<i>.</i></button>
+    <div class="trail" id="trail"></div>
+    <a id="arxiv-link" target="_blank" rel="noopener">arXiv ↗</a>
+    <button id="theme" title="Toggle light / dark" aria-label="Toggle light or dark theme">◐</button>
+  </div>
+  <div class="page" id="page">
+    <div class="col-l" id="col-l"></div>
+    <article id="paper"></article>
+    <div class="col-r" id="col-r"></div>
+  </div>
+</section>
+
+<div id="pill"><button data-act="explain">What is this?</button><button data-act="visualize">Sketch</button><button data-act="play" class="hot">Play</button><button data-act="answer">Where's it from?</button></div>
+<div id="tip"></div>
+<div id="stage" hidden><div class="stage-box"><button class="stage-x" aria-label="Close">×</button><div class="stage-sel"></div><div class="stage-frame"></div><div class="toy-hint"></div><div class="sk-cap"></div></div></div>
+<div id="hint">select any phrase to ask about it</div>
+
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+const esc = s => s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const norm = s => s.replace(/\[ref:\d+\]/g, "").replace(/\s+/g, " ").toLowerCase().trim();
+const store = { get: k => { try { return localStorage.getItem(k); } catch { return null; } },
+                set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
+let paper = null, trail = [], pending = null, notes = [], lastHue = null;
+
+function math(el) {
+  if (window.renderMathInElement) renderMathInElement(el, {
+    delimiters: [{ left: "\\[", right: "\\]", display: true }, { left: "\\(", right: "\\)", display: false }],
+    throwOnError: false,
+  });
+}
+
+// Paper math shows arXiv's MathML (native in browsers); anything without MathML is left for KaTeX.
+function renderBlock(b) {
+  const text = s => esc(s).replace(/\[ref:(\d+)\]/g, (_, n) =>
+    `<sup class="ref" title="${esc(paper.refs[n] || "")}">${n}</sup>`);
+  const re = /\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)/g;
+  let out = "", last = 0, m;
+  while ((m = re.exec(b))) {
+    out += text(b.slice(last, m.index)) + (paper.math?.[m[1] ?? m[2]] || esc(m[0]));
+    last = re.lastIndex;
+  }
+  return out + text(b.slice(last));
+}
+
+// Figures show arXiv's images; tables show the paper's own table (captions above tables, below figures).
+function renderFigure(i, f, cap) {
+  cap = cap.replace(/\s*\{\{rows:[\s\S]*\}\}\s*$/, "");  // table data is there for the model only
+  const capHtml = renderBlock(cap).replace(/^((?:Figure|Table|Fig\.)\s*[\w.]+:?)/, '<span class="fignum">$1</span>');
+  const cells = html => html.replace(/\[?\[ref:(\d+)\]\]?/g, (_, n) =>
+    `<sup class="ref" title="${esc(paper.refs[n] || "")}">${n}</sup>`);
+  const media = f?.table ? `<div class="tbl">${cells(f.table)}</div>`
+    : (f?.imgs || []).map(s => `<img src="${esc(s)}" alt="" loading="lazy">`).join("");
+  if (!media) return `<p data-i="${i}" class="figcap">${capHtml}</p>`;
+  const above = f.kind === "table";
+  return `<figure class="fig" data-i="${i}">${above ? `<figcaption>${capHtml}</figcaption>` : ""}<div class="media">${media}</div>${above ? "" : `<figcaption>${capHtml}</figcaption>`}</figure>`;
+}
+
+async function open(id, quote, push = true) {
+  $("#home").style.display = "none"; $("#reader").style.display = "block";
+  notes = []; noteSeq = 0; $("#col-l").innerHTML = $("#col-r").innerHTML = "";
+  $("#paper").innerHTML = '<p class="byline sc">fetching paper…</p>';
+  const r = await fetch("/api/paper/" + encodeURIComponent(id));
+  if (!r.ok) { $("#paper").innerHTML = `<p class="err" style="text-align:center">${esc((await r.json()).detail || "Couldn't load that paper.")}</p>`; return; }
+  paper = await r.json();
+  if (push) history.pushState({ id: paper.arxiv_id }, "", "?paper=" + paper.arxiv_id);
+  const at = trail.findIndex(t => t.id === paper.arxiv_id);
+  trail = at >= 0 ? trail.slice(0, at + 1) : [...trail, { id: paper.arxiv_id, title: paper.title }];
+  renderTrail();
+  $("#arxiv-link").href = "https://arxiv.org/abs/" + paper.arxiv_id;
+  document.title = paper.title + " · Lineage";
+
+  const html = [`<h1 class="title">${esc(paper.title)}</h1>`,
+                `<div class="byline sc">arXiv:${esc(paper.arxiv_id)} &nbsp;·&nbsp; annotated with Beam</div>`];
+  let inAbstract = false;
+  paper.blocks.forEach((b, i) => {
+    if (!b.trim()) return;
+    if (b.startsWith("## ")) {
+      inAbstract = /^abstract$/i.test(b.slice(3).trim());
+      html.push(`<h2 data-i="${i}"${inAbstract ? ' class="abstract"' : ""}>${esc(b.slice(3))}</h2>`);
+      return;
+    }
+    const fm = b.match(/^\[\[fig:(\d+)\]\]\s*([\s\S]*)$/);
+    if (fm) { html.push(renderFigure(i, paper.figures?.[fm[1]], fm[2])); return; }
+    const eq = /^\s*\\\[[\s\S]*\\\]\s*(\(\w+\))?\s*$/.test(b);  // a display equation with its number
+    const cls = [eq && "eq", inAbstract && "abstract"].filter(Boolean).join(" ");
+    html.push(`<p data-i="${i}"${cls ? ` class="${cls}"` : ""}>${renderBlock(b)}</p>`);
+  });
+  $("#paper").innerHTML = html.join("");
+  math($("#paper"));
+  window.scrollTo(0, 0);
+  if (quote) flashQuote(quote);
+}
+
+function flashQuote(quote) {
+  const q = norm(quote).slice(0, 60);
+  const i = paper.blocks.findIndex(b => norm(b).includes(q));
+  const el = i >= 0 && $(`#paper [data-i="${i}"]`);
+  if (!el) return;
+  el.scrollIntoView({ block: "center" });
+  el.classList.add("flash");
+  setTimeout(() => el.classList.remove("flash"), 2500);
+}
+
+function renderTrail() {
+  $("#trail").innerHTML = trail.map((t, i) =>
+    `${i ? "<span>›</span>" : ""}<button class="${i === trail.length - 1 ? "cur" : ""}" data-id="${t.id}" title="${esc(t.title)}">${esc(t.title)}</button>`).join("");
+}
+
+/* Cursor hint: shown until the reader has asked something once */
+let hintTimer;
+document.addEventListener("mousemove", e => {
+  const h = $("#hint");
+  const overText = e.target.closest?.("#paper p, #paper h2");
+  if (store.get("asked") || !overText || !getSelection().isCollapsed) { h.classList.remove("show"); clearTimeout(hintTimer); return; }
+  h.style.left = e.clientX + 22 + "px"; h.style.top = e.clientY + 18 + "px";
+  if (!h.classList.contains("show")) { clearTimeout(hintTimer); hintTimer = setTimeout(() => h.classList.add("show"), 450); }
+});
+
+/* Selection → pill */
+// A highlight must never split an equation: cutting a <math> element in two makes it vanish.
+function snapToMath(range) {
+  const mathOf = n => (n.nodeType === 1 ? n : n.parentElement)?.closest("math");
+  const ms = mathOf(range.startContainer), me = mathOf(range.endContainer);
+  if (ms) range.setStartBefore(ms);
+  if (me) range.setEndAfter(me);
+  return range;
+}
+// What the model sees: equations as LaTeX, citation numbers dropped.
+function rangeText(range) {
+  const f = range.cloneContents();
+  f.querySelectorAll("math").forEach(m => m.replaceWith(`\\(${m.getAttribute("alttext") || ""}\\)`));
+  f.querySelectorAll("sup.ref, sup.nref").forEach(x => x.remove());
+  return f.textContent.replace(/\s+/g, " ").trim();
+}
+
+const onSelect = e => {
+  if (e.target.closest?.("#pill")) return;
+  setTimeout(() => {
+    const s = getSelection();
+    const range = s.rangeCount ? snapToMath(s.getRangeAt(0).cloneRange()) : null;
+    const text = range ? rangeText(range) : "";
+    const block = range && range.commonAncestorContainer;
+    const el = block && (block.nodeType === 1 ? block : block.parentElement)?.closest("#paper [data-i]");
+    if (!text || text.length > 800 || !el || e.target.closest?.("mark.hl")) { $("#pill").style.display = "none"; return; }
+    $("#hint").classList.remove("show");
+    const r = range.getBoundingClientRect();
+    pending = { text, block: +el.dataset.i, range };
+    const pill = $("#pill");
+    pill.style.display = "block";
+    pill.style.left = Math.max(8, Math.min(innerWidth - pill.offsetWidth - 8, r.left + r.width / 2 - pill.offsetWidth / 2 + scrollX)) + "px";
+    pill.style.top = (r.top + scrollY - pill.offsetHeight - 10) + "px";
+  });
+};
+document.addEventListener("mouseup", onSelect);
+document.addEventListener("touchend", e => setTimeout(() => onSelect(e), 300));  // touch selections settle late
+
+$("#pill").addEventListener("click", e => {
+  const act = e.target.dataset.act;
+  if (!act || !pending) return;
+  $("#pill").style.display = "none";
+  store.set("asked", "1");
+  const p = pending; pending = null;
+  getSelection().removeAllRanges();
+  ask(act, p);
+});
+
+/* Notes: a highlight in the text, a note in whichever margin has room */
+function pickHue() {
+  let h;
+  do { h = Math.floor(Math.random() * 360); } while (lastHue !== null && Math.abs(((h - lastHue + 540) % 360) - 180) < 50);
+  return (lastHue = h);
+}
+
+let noteSeq = 0;
+function addNote(kind, { text, block, range }) {
+  const id = ++noteSeq;
+  const color = `oklch(var(--hl-l) 0.17 ${pickHue()})`;
+  const mark = document.createElement("mark");
+  mark.className = "hl"; mark.dataset.note = id; mark.style.setProperty("--c", color);
+  try { mark.appendChild(range.extractContents()); range.insertNode(mark); } catch {}
+  const sup = document.createElement("sup");
+  sup.className = "nref"; sup.dataset.note = id; sup.textContent = id; sup.style.setProperty("--c", color);
+  mark.after(sup);
+
+  const el = document.createElement("div");
+  el.className = `note fresh k-${kind.replace(/\W+/g, "-")}`; el.dataset.note = id; el.style.setProperty("--c", color);
+  el.innerHTML = `<div class="lab"><span>${id}</span><span>${kind}</span><button class="x" title="Remove note">×</button></div><div class="body"></div>`;
+  const note = { id, el, mark, sup, block, side: null };
+  notes.push(note);
+  note.side = chooseSide(note);
+  (note.side === "l" ? $("#col-l") : $("#col-r")).appendChild(el);
+  new ResizeObserver(() => requestAnimationFrame(layout)).observe(el);
+  layout();
+  setTimeout(() => el.classList.remove("fresh"), 2200);
+  return $(".body", el);
+}
+
+const isNarrow = () => innerWidth < 1240;
+const wantTop = n => n.mark.getBoundingClientRect().top - $("#page").getBoundingClientRect().top - 4;
+
+function placeSide(list) {
+  let bottom = -Infinity;
+  for (const n of list.sort((a, b) => wantTop(a) - wantTop(b))) {
+    const top = Math.max(wantTop(n), bottom + 14);
+    n.el.style.top = top + "px";
+    bottom = top + n.el.offsetHeight;
+  }
+  return bottom;
+}
+
+function chooseSide(note) {
+  const want = wantTop(note), cost = {};
+  for (const side of ["r", "l"]) {
+    const blockers = notes.filter(n => n !== note && n.side === side)
+      .map(n => [parseFloat(n.el.style.top) || 0, (parseFloat(n.el.style.top) || 0) + n.el.offsetHeight]);
+    const pushed = blockers.filter(([t, b]) => b + 14 > want && t < want + 120).reduce((m, [, b]) => Math.max(m, b + 14), want);
+    cost[side] = pushed - want;
+  }
+  return cost.l < cost.r ? "l" : "r";
+}
+
+function layout() {
+  const narrow = isNarrow();
+  $("#page").classList.toggle("narrow", narrow);
+  for (const n of notes) {
+    const home = narrow ? null : (n.side === "l" ? $("#col-l") : $("#col-r"));
+    if (narrow) {
+      const blockEl = n.mark.closest("[data-i]") || $(`#paper [data-i="${n.block}"]`);
+      if (n.el.previousElementSibling !== blockEl && blockEl) blockEl.after(n.el);
+    } else if (n.el.parentElement !== home) home.appendChild(n.el);
+  }
+  if (!narrow) { placeSide(notes.filter(n => n.side === "l")); placeSide(notes.filter(n => n.side === "r")); }
+}
+addEventListener("resize", () => requestAnimationFrame(layout));
+// Images, fonts and math load after the text, pushing highlights down; keep notes level with them.
+new ResizeObserver(() => requestAnimationFrame(layout)).observe($("#paper"));
+
+function setOn(id, on) {
+  $$(`[data-note="${id}"]`).forEach(el => el.classList.toggle("on", on));
+}
+document.addEventListener("mouseover", e => {
+  const t = e.target.closest?.("[data-note]");
+  if (t) setOn(t.dataset.note, true);
+});
+document.addEventListener("mouseout", e => {
+  const t = e.target.closest?.("[data-note]");
+  if (t && !t.contains(e.relatedTarget)) setOn(t.dataset.note, false);
+});
+
+function removeNote(id) {
+  const n = notes.find(n => n.id === +id);
+  if (!n) return;
+  n.mark.replaceWith(...n.mark.childNodes); n.sup.remove(); n.el.remove();
+  notes = notes.filter(x => x !== n);
+  layout();
+}
+
+/* Asking Beam */
+// Model text may mention [ref:N] markers; show them as the paper's own citation numbers.
+const refs = html => html.replace(/\[ref:(\d+)\]/g, (_, n) =>
+  `<sup class="ref" title="${esc(paper.refs[n] || "")}" style="font:500 10px var(--sans);color:var(--muted)">${n}</sup>`);
+
+async function ask(act, sel) {
+  $("#hint").classList.remove("show");
+  const payload = JSON.stringify({ arxiv_id: paper.arxiv_id, selection: sel.text, block: sel.block });
+  const opts = { method: "POST", headers: { "Content-Type": "application/json" }, body: payload };
+  if (act === "explain") {
+    const body = addNote("what is this", sel);
+    body.innerHTML = '<div class="progress"><span class="live">reading the paper</span></div>';
+    try {
+      const r = await (await fetch("/api/explain", opts)).json();
+      if (r.error) { body.innerHTML = `<span class="err">${esc(r.error)}</span>`; return; }
+      body.innerHTML = `<div>${refs(esc(r.text)).replace(/\n+/g, "<br><br>")}</div><div class="cost">$${r.usd.toFixed(3)}</div>`;
+      math(body);
+    } catch { body.innerHTML = '<span class="err">Something went wrong. Try again.</span>'; }
+    return;
+  }
+  if (act === "answer") return answerFromCitations(sel, opts);
+  if (act === "visualize") return toyNote(sel, "sketch");
+  if (act === "play") return toyNote(sel, "play");
+}
+
+// Stream newline-delimited JSON events from a POST endpoint.
+async function streamEvents(url, opts, onEvent) {
+  const res = await fetch(url, opts);
+  const reader = res.body.getReader(), dec = new TextDecoder();
+  let buf = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let nl;
+    while ((nl = buf.indexOf("\n")) >= 0) { onEvent(JSON.parse(buf.slice(0, nl))); buf = buf.slice(nl + 1); }
+  }
+  if (buf.trim()) onEvent(JSON.parse(buf));  // a plain JSON reply, e.g. the rate limiter's
+}
+
+async function answerFromCitations(sel, opts) {
+  const body = addNote("where it's from", sel);
+  const live = m => body.innerHTML = `<div class="progress"><span class="live">${esc(m.toLowerCase())}</span></div>`;
+  live("Finding what this passage cites");
+  await streamEvents("/api/synthesize", opts, ev => {
+    if (ev.progress) live(ev.progress);
+    if (ev.error) body.innerHTML = `<span class="err">${esc(ev.error)}</span>`;
+    if (ev.answer) {
+      const a = ev.answer;
+      if (a.error) { body.innerHTML = `<span class="err">${esc(a.error)}</span>`; return; }
+      const src = Object.fromEntries(a.sources.map(s => [s.s, s]));
+      const fn = c => `<sup class="fn${c.verified ? "" : " unv"}" data-open="${src[c.s].arxiv_id}" data-quote="${esc(c.quote)}"
+        data-tip="${esc(c.quote)}" data-tip-src="${esc(`${src[c.s].year} · ${src[c.s].title}${c.verified ? "" : " · quote not found in source"}`)}">${c.s}</sup>`;
+      // One footnote per source per segment, comma-separated; prefer a verified quote when there are several.
+      const fns = cites => Object.values(cites.reduce((m, c) => ((!m[c.s] || (!m[c.s].verified && c.verified)) && (m[c.s] = c), m), {}))
+        .map(fn).join('<sup class="fnsep">,</sup>');
+      const isGap = p => a.gap && p.map(seg => seg.text).join(" ").trim() === a.gap.trim();  // model sometimes repeats it
+      const paras = a.paragraphs.filter(p => !isGap(p)).map(p => `<p>${p.map(seg => esc(seg.text) + fns(seg.cite)).join(" ")}</p>`).join("");
+      const used = new Set(a.paragraphs.flat().flatMap(seg => seg.cite.map(c => c.s)));
+      const list = a.sources.filter(s => used.has(s.s)).map(s => `<li><span class="sn">${s.s}</span><button data-open="${s.arxiv_id}">${esc(s.year ? s.year + " · " : "")}${esc(s.title)}</button></li>`).join("");
+      const gap = a.gap ? `<p class="gap">Not in these sources: ${esc(a.gap)}</p>` : "";
+      const unres = a.unresolved?.length ? `<div class="unres">also cited, not on arXiv: ${a.unresolved.map(u => esc(u.title) + (u.year ? ` (${u.year})` : "")).join("; ")}</div>` : "";
+      body.innerHTML = `<div class="ans">${paras}</div>${gap}<ol class="srcs">${list}</ol>${unres}<div class="cost">${a.sources.length} papers read in one pass · $${ev.usd.toFixed(3)}</div>`;
+      math(body);
+    }
+  });
+}
+
+/* Sketch and Play: Beam writes drawing code; the sandbox tests it (every control, layout); failures go back to Beam */
+const MAX_FIXES = 2;
+let toyHtml = null;
+const toyHandlers = new WeakMap();  // frame window → message handler
+addEventListener("message", e => { const h = e.source && toyHandlers.get(e.source); if (h) h(e.data || {}); });
+
+const postJSON = async (url, data) => (await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" },
+                                                         body: JSON.stringify(data) })).json();
+
+function toyTheme(el) {
+  const cs = getComputedStyle(el), v = k => cs.getPropertyValue(k).trim();
+  return { ink: v("--ink"), muted: v("--muted"), faint: v("--faint"), bg: v("--bg"), good: v("--good"), bad: v("--bad"),
+           accent: v("--c") || v("--accent"), scheme: cs.colorScheme.includes("dark") ? "dark" : "light" };
+}
+
+// Mount a toy in a sandboxed frame (inlined via srcdoc: no same-origin access, no network). With test:true it
+// resolves once the frame has exercised every control; otherwise as soon as it starts.
+async function mountToy(host, spec, { test = false, autoplay = false } = {}) {
+  toyHtml ||= await (await fetch("/toy")).text();
+  const f = document.createElement("iframe");
+  f.className = "toy"; f.title = "Interactive toy"; f.setAttribute("sandbox", "allow-scripts"); f.srcdoc = toyHtml;
+  host.replaceChildren(f);
+  return new Promise(resolve => {
+    const timer = setTimeout(() => resolve({ ok: false, error: "The toy didn't finish loading within 20 seconds." }), 20000);
+    toyHandlers.set(f.contentWindow, m => {
+      if (m.type === "hello") {
+        f.contentWindow.postMessage({ type: "load", spec, theme: toyTheme(host), test, autoplay }, "*");
+        if (!test) { clearTimeout(timer); resolve({ ok: true, frame: f }); }
+      } else if (m.type === "size") f.style.height = Math.min(1200, Math.max(40, +m.h || 0)) + "px";
+      else if (m.type === "tested") { clearTimeout(timer); resolve({ ...m, frame: f }); }
+    });
+  });
+}
+
+const KINDS = {
+  play: { endpoint: "/api/play", writing: "writing the toy", testing: "testing every control", what: "toy" },
+  sketch: { endpoint: "/api/visualize", writing: "sketching", testing: "checking the layout", what: "sketch" },
+};
+
+async function toyNote(sel, kind) {
+  const K = KINDS[kind], body = addNote(kind, sel), note = body.closest(".note");
+  const ctx = { arxiv_id: paper.arxiv_id, selection: sel.text, block: sel.block };
+  body.innerHTML = `<div class="progress"><span class="live">${K.writing}</span></div><div class="toy-host testing"></div>`;
+  const status = m => { $(".progress", body).innerHTML = `<span class="live">${esc(m)}</span>`; };
+  const fail = m => { body.innerHTML = `<span class="err">${esc(m)}</span>`; };
+  let r;
+  try { r = await postJSON(K.endpoint, ctx); } catch { return fail("Couldn't reach Beam. Try again."); }
+  if (r.error) return fail(r.error);
+  let spec = r.toy, usd = r.usd, fixed = 0, res;
+  for (let attempt = 0; ; attempt++) {
+    status(attempt ? "testing the fix" : K.testing);
+    res = await mountToy($(".toy-host", body), spec, { test: true });
+    if (res.ok || attempt === MAX_FIXES) break;
+    status(`fixing: ${res.error.length > 70 ? res.error.slice(0, 70) + "…" : res.error}`);
+    try { r = await postJSON(`/api/${kind}/fix`, { ...ctx, spec, error: res.error }); } catch { r = { error: "Couldn't reach Beam." }; }
+    if (r.error) break;
+    usd += r.usd; spec = r.toy; fixed++;
+  }
+  if (!res.ok) return fail(`Beam couldn't get this ${K.what} right (${res.error}). Try selecting a little more context.`);
+
+  const host = $(".toy-host", body);
+  host.classList.remove("testing");
+  $(".progress", body).remove();
+  body.insertAdjacentHTML("beforeend", `
+    ${spec.hint ? `<div class="toy-hint">${esc(spec.hint)}</div>` : ""}
+    ${spec.caption ? `<div class="sk-cap">${esc(spec.caption)}</div>` : ""}
+    <div class="toy-foot">
+      <span title="Run in the sandbox: every control at its extremes, and the layout checked">✓ ${kind === "play" ? `tested ×${res.checks}` : "checked"}${fixed ? ` · fixed ${fixed}` : ""}</span>
+      <button class="toy-big" title="Open larger">enlarge</button><button class="toy-src-btn">code</button>
+      <span class="toy-cost">$${usd.toFixed(3)}</span>
+    </div>
+    <pre class="toy-src" hidden>${esc(spec.code)}</pre>`);
+  $(".toy-src-btn", body).onclick = () => { const pre = $(".toy-src", body); pre.hidden = !pre.hidden; };
+  $(".toy-big", body).onclick = () => openStage(spec, note, sel.text);
+}
+
+/* Enlarged toy: same spec, bigger canvas; Esc or the backdrop closes it */
+async function openStage(spec, note, text) {
+  const stage = $("#stage"), box = $(".stage-box", stage);
+  box.style.setProperty("--c", getComputedStyle(note).getPropertyValue("--c"));
+  $(".stage-sel", stage).textContent = text.length > 140 ? text.slice(0, 140) + "…" : text;
+  $(".toy-hint", stage).textContent = spec.hint || "";
+  $(".sk-cap", stage).textContent = spec.caption || "";
+  stage.hidden = false;
+  await mountToy($(".stage-frame", stage), spec);
+}
+const closeStage = () => { $("#stage").hidden = true; $(".stage-frame").replaceChildren(); };
+$("#stage").addEventListener("click", e => { if (e.target.id === "stage" || e.target.closest(".stage-x")) closeStage(); });
+addEventListener("keydown", e => { if (e.key === "Escape" && !$("#stage").hidden) closeStage(); });
+
+/* Quote preview on footnote hover */
+document.addEventListener("mouseover", e => {
+  const t = e.target.closest?.("[data-tip]"), tip = $("#tip");
+  if (!t) { tip.style.display = "none"; return; }
+  tip.innerHTML = `“${esc(t.dataset.tip)}”<div class="ts">${esc(t.dataset.tipSrc || "")}</div>`;
+  tip.style.display = "block";
+  const r = t.getBoundingClientRect();
+  tip.style.left = Math.max(8, Math.min(innerWidth - tip.offsetWidth - 8, r.left - tip.offsetWidth / 2)) + "px";
+  tip.style.top = (r.bottom + 8 + tip.offsetHeight > innerHeight ? r.top - tip.offsetHeight - 8 : r.bottom + 8) + "px";
+});
+
+/* Navigation */
+document.addEventListener("click", e => {
+  const x = e.target.closest(".note .x");
+  if (x) return removeNote(x.closest(".note").dataset.note);
+  const o = e.target.closest("[data-open]");
+  if (o) return open(o.dataset.open, o.dataset.quote);
+  const hl = e.target.closest("mark.hl, sup.nref");
+  if (hl && isNarrow()) $(`.note[data-note="${hl.dataset.note}"]`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  const t = e.target.closest("#trail [data-id]");
+  if (t) open(t.dataset.id);
+  const ex = e.target.closest(".examples [data-id]");
+  if (ex) open(ex.dataset.id);
+});
+if (store.get("theme")) document.documentElement.dataset.theme = store.get("theme");
+$("#theme").addEventListener("click", () => {
+  const dark = getComputedStyle(document.documentElement).colorScheme.includes("dark");
+  document.documentElement.dataset.theme = dark ? "light" : "dark";
+  store.set("theme", document.documentElement.dataset.theme);
+  $$("iframe.toy").forEach(f => f.contentWindow?.postMessage({ type: "theme", theme: toyTheme(f.parentElement) }, "*"));
+});
+$("#go").addEventListener("submit", e => { e.preventDefault(); if ($("#q").value.trim()) open($("#q").value.trim()); });
+$("#home-btn").addEventListener("click", () => { history.pushState({}, "", "/"); $("#reader").style.display = "none"; $("#home").style.display = "grid"; trail = []; });
+addEventListener("popstate", e => e.state?.id ? open(e.state.id, null, false) : location.reload());
+addEventListener("load", () => { const id = new URLSearchParams(location.search).get("paper"); if (id) open(id, null, false); });
+</script>
+</body>
+</html>

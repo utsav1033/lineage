@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+huggingface_hub
+openai
+requests
+beautifulsoup4
+pypdf
+fonttools

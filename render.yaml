@@ -1,0 +1,14 @@
+# One-click deploy on Render's free tier: https://render.com/deploy?repo=https://github.com/utsav1033/lineage
+services:
+  - type: web
+    name: lineage-beam
+    runtime: docker
+    plan: free
+    healthCheckPath: /
+    envVars:
+      - key: HF_TOKEN
+        sync: false  # asked for in the deploy form; never stored in the repo
+      - key: LINEAGE_DAILY_BUDGET_USD
+        value: "3"
+      - key: LINEAGE_REQUESTS_PER_HOUR
+        value: "40"

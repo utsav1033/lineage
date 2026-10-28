@@ -1,0 +1,550 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Toy runtime. Loaded in <iframe sandbox="allow-scripts"> (opaque origin: no cookies, no access to the reader page).
+     Beam's code never runs here: it runs in a Web Worker that can be killed, with no network (connect-src 'none'). -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; worker-src blob:; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src data:; connect-src 'none'">
+<script>
+  // Runtime failures must reach the reader page, which can't see this frame's console.
+  addEventListener("error", e => parent.postMessage({ type: "tested", ok: false, error: "Toy runtime error: " + e.message + " (line " + e.lineno + ")" }, "*"));
+</script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Kalam:wght@400&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/roughjs@4.6.6/bundled/rough.js"></script>
+<style>
+  :root { --ink: #18181b; --muted: #8a8a90; --faint: #ececee; --accent: #c2410c; --bg: #fff; --good: #15803d; --bad: #b91c1c; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: transparent; color: var(--ink); font: 12px/1.4 "Inter", system-ui, sans-serif;
+               -webkit-font-smoothing: antialiased; overflow: hidden; }
+  canvas { display: block; width: 100%; }
+  #reads { display: grid; grid-template-columns: 1fr auto; column-gap: 10px; row-gap: 2px; margin: 6px 0 2px; }
+  #reads .l { color: var(--muted); font-size: 11px; }
+  #reads .v { font-variant-numeric: tabular-nums; text-align: right; font-weight: 500; }
+  #ctrls { margin-top: 8px; display: grid; gap: 9px; }
+  .c-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .c-lab { color: var(--muted); font-size: 11px; }
+  .c-val { font-variant-numeric: tabular-nums; font-weight: 500; }
+  input[type=range] { width: 100%; margin: 3px 0 0; accent-color: var(--accent); height: 16px; cursor: pointer; }
+  .seg { display: inline-flex; border: 1px solid var(--faint); border-radius: 999px; padding: 2px; gap: 2px; margin-top: 3px; }
+  .seg button { font: 500 11px "Inter", system-ui; color: var(--muted); background: none; border: 0; border-radius: 999px;
+                padding: 2px 9px; cursor: pointer; }
+  .seg button.on { background: var(--accent); color: var(--bg); }
+  .tog { display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
+  .tog .sw { width: 26px; height: 15px; border-radius: 999px; background: var(--faint); position: relative; transition: background .15s; flex: none; }
+  .tog .sw::after { content: ""; position: absolute; top: 2px; left: 2px; width: 11px; height: 11px; border-radius: 50%;
+                    background: var(--bg); box-shadow: 0 1px 2px rgba(0,0,0,.25); transition: left .15s; }
+  .tog.on .sw { background: var(--accent); } .tog.on .sw::after { left: 13px; }
+  .time { display: flex; align-items: center; gap: 8px; }
+  .time button { width: 24px; height: 24px; flex: none; border-radius: 50%; border: 1px solid var(--faint); background: none;
+                 color: var(--ink); cursor: pointer; font-size: 10px; line-height: 1; }
+  .time input { flex: 1; margin: 0; }
+  #msg { display: none; color: var(--bad); font-size: 11px; margin-top: 4px; }
+  sup { font-size: 0.75em; }
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+<div id="reads"></div>
+<div id="ctrls"></div>
+<div id="msg"></div>
+
+<!-- Runs inside the worker, before Beam's code. Exposes only `api`; ops are recorded, never drawn here. -->
+<script type="text/plain" id="worker-runtime">
+"use strict";
+const api = (() => {
+  const W = __W__, H = __H__;
+  let ops = [], reads = [];
+  const r1 = v => Math.round(v * 10) / 10;
+  const P = (x, y) => [r1(x), r1(y)];
+  const style = (o = {}) => ({ c: o.color || "ink", sw: o.width, dash: !!o.dashed, crisp: !!o.crisp });  // sw: stroke width (w is a rect's width)
+  const fmt = (v, digits = 3) => {
+    if (typeof v !== "number") return String(v);
+    if (Number.isNaN(v)) return "NaN";
+    if (!Number.isFinite(v)) return v > 0 ? "∞" : "−∞";
+    if (v === 0) return "0";
+    const a = Math.abs(v);
+    if (a >= 1e5 || a < 1e-3) return v.toExponential(2);
+    return String(+v.toFixed(digits));
+  };
+  // Exact IEEE rounding for low-precision formats (JS numbers are fp64). Ties go to even, like hardware.
+  const tiesEven = x => { const f = Math.floor(x), d = x - f; return d > 0.5 ? f + 1 : d < 0.5 ? f : (f % 2 === 0 ? f : f + 1); };
+  const quant = (x, mant, emin, max) => {
+    if (!Number.isFinite(x) || x === 0) return x;
+    const a = Math.abs(x);
+    let e = Math.floor(Math.log2(a));
+    if (2 ** e > a) e -= 1; else if (2 ** (e + 1) <= a) e += 1;
+    e = Math.max(e, emin);
+    const q = 2 ** (e - mant), r = tiesEven(a / q) * q;
+    return Math.sign(x) * (r > max ? Infinity : r);
+  };
+  const f16 = x => quant(x, 10, -14, 65504);
+  const bf16 = x => quant(x, 7, -126, 3.3895313892515355e38);
+  const round = (x, fmt) => fmt === "fp16" ? f16(x) : fmt === "bf16" ? bf16(x) : fmt === "fp32" ? Math.fround(x) : x;
+  const rng = (seed = 1) => {
+    let s = seed >>> 0;
+    const u = () => { s = (s + 0x6D2B79F5) >>> 0; let t = s; t = Math.imul(t ^ (t >>> 15), t | 1);
+                      t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+    u.normal = () => Math.sqrt(-2 * Math.log(u() || 1e-12)) * Math.cos(2 * Math.PI * u());
+    return u;
+  };
+  const softmax = (xs, fmtName) => {
+    const R = v => round(v, fmtName), m = Math.max(...xs);
+    const es = xs.map(x => R(Math.exp(R(x - m)))), z = R(es.reduce((a, b) => R(a + b), 0));
+    return es.map(e => R(e / z));
+  };
+  // g_t, e^-m, x^{2} → gₜ, e⁻ᵐ, x² wherever every character has a Unicode script form.
+  const SUP = Object.fromEntries([..."0123456789+-=()abcdefghijklmnoprstuvwxyzT"].map((c, i) => [c, "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁼⁽⁾ᵃᵇᶜᵈᵉᶠᵍʰⁱʲᵏˡᵐⁿᵒᵖʳˢᵗᵘᵛʷˣʸᶻᵀ"[i]]));
+  const SUB = Object.fromEntries([..."0123456789+-=()aehijklmnoprstuvx"].map((c, i) => [c, "₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎ₐₑₕᵢⱼₖₗₘₙₒₚᵣₛₜᵤᵥₓ"[i]]));
+  const conv = table => (m, a, b) => { const body = a ?? b; return [...body].every(c => table[c]) ? [...body].map(c => table[c]).join("") : m; };
+  const uni = str => String(str).replace(/\^(?:\{([^}]*)\}|(-?[A-Za-z0-9]+))/g, conv(SUP)).replace(/_(?:\{([^}]*)\}|([A-Za-z0-9]+))/g, conv(SUB));
+  const text = (x, y, str, o = {}) => ops.push({ k: "text", x: r1(x), y: r1(y), s: uni(str), size: o.size || "s",
+    align: o.align || "start", c: o.color || "ink", rot: o.rotate || 0, halo: !!o.halo,
+    ...(o.maxWidth ? { maxw: o.maxWidth } : {}), ...(o.valign === "middle" ? { valign: "middle" } : {}) });
+  const CHAR_W = { xs: 5.2, s: 6.4, m: 7.7, l: 9.7 };  // average Kalam glyph width per size, in canvas units
+  const path = (pts, o = {}) => {
+    const clean = pts.filter(p => Number.isFinite(p[0]) && Number.isFinite(p[1])).map(p => P(p[0], p[1]));
+    if (clean.length >= 2) ops.push({ k: "path", pts: clean, smooth: !!o.smooth, ...style(o) });
+  };
+
+  function axes(o = {}) {
+    const [fx, fy, fw, fh] = o.at || [40, 10, W - 50, H - 44];
+    const [x0, x1] = o.x || [0, 1], [y0, y1] = o.y || [0, 1];
+    const t = (v, a, b, log) => log ? (Math.log10(v) - Math.log10(a)) / (Math.log10(b) - Math.log10(a)) : (v - a) / (b - a);
+    const X = v => fx + t(v, x0, x1, o.xlog) * fw;
+    // On a log y axis, values <= 0 sit on the floor: "dropped to zero" stays visible instead of vanishing.
+    const Y = v => (o.ylog && !(v > 0)) ? fy + fh : fy + fh - t(v, y0, y1, o.ylog) * fh;
+    const clampY = y => Math.min(fy + fh, Math.max(fy - 2, y));
+    ops.push({ k: "path", pts: [P(fx, fy), P(fx, fy + fh), P(fx + fw, fy + fh)], c: "muted", sw: 1, dash: false });
+    const xt = o.xticks || [x0, x1], yt = o.yticks || [y0, y1];
+    xt.forEach((v, i) => text(X(v), fy + fh + 13, o.xtickLabels?.[i] ?? fmt(v), { size: "xs", color: "muted",
+      align: xt.length === 2 ? (i ? "end" : "start") : "middle" }));
+    yt.forEach((v, i) => text(fx - 4, Y(v) + (i === yt.length - 1 && !o.yticks ? 8 : 3), o.ytickLabels?.[i] ?? fmt(v),
+      { size: "xs", color: "muted", align: "end" }));
+    if (o.xlabel) text(fx + fw / 2, fy + fh + 28, o.xlabel, { size: "s", color: "muted", align: "middle" });
+    if (o.ylabel) text(11, fy + fh / 2, o.ylabel, { size: "s", color: "muted", align: "middle", rotate: -90 });
+    const ax = {
+      X, Y, frame: [fx, fy, fw, fh],
+      line(xs, ys, so = {}) {
+        let seg = [];
+        const flush = () => { if (seg.length >= 2) ops.push({ k: "path", pts: seg, smooth: false, rough: 0.35, ...style({ width: 1.8, ...so }) }); seg = []; };
+        xs.forEach((x, i) => {
+          const px = X(x), py = Y(ys[i]);
+          if (Number.isFinite(px) && Number.isFinite(py) && px >= fx - 0.5 && px <= fx + fw + 0.5) seg.push(P(px, clampY(py)));
+          else flush();
+        });
+        flush();
+        if (so.label && xs.length >= 2) { const i = Math.min(xs.length - 1, Math.max(0, so.labelAt ?? xs.length - 1));
+          text(X(xs[i]) + 3, clampY(Y(ys[i])) - 5, so.label, { size: "s", color: so.color || "ink", halo: true }); }
+      },
+      dots(xs, ys, so = {}) { xs.forEach((x, i) => { const py = Y(ys[i]); if (Number.isFinite(py))
+        ops.push({ k: "circle", x: r1(X(x)), y: r1(clampY(py)), d: so.size || 4, fill: true, ...style(so) }); }); },
+      point(x, y, label = "", so = {}) {
+        const px = X(x), py = clampY(Y(y));
+        if (!Number.isFinite(px) || !Number.isFinite(py)) return;
+        ops.push({ k: "circle", x: r1(px), y: r1(py), d: so.size || 8, fill: true, ...style({ color: "accent", ...so }) });
+        if (label) text(px + 7, py - 6, label, { size: "s", color: so.color || "accent", halo: true });
+      },
+      vline(x, label = "", so = {}) {
+        const px = X(x); if (!Number.isFinite(px)) return;
+        ops.push({ k: "path", pts: [P(px, fy), P(px, fy + fh)], ...style({ color: "muted", dashed: true, width: 1, ...so }) });
+        if (label) text(px + 3, fy + 9, label, { size: "s", color: so.color || "muted", halo: true });
+      },
+      hline(y, label = "", so = {}) {
+        const py = Y(y); if (!Number.isFinite(py)) return;
+        ops.push({ k: "path", pts: [P(fx, py), P(fx + fw, py)], ...style({ color: "muted", dashed: true, width: 1, ...so }) });
+        if (label) text(fx + fw, py - 4, label, { size: "s", color: so.color || "muted", align: "end", halo: true });
+      },
+      band(xa, xb, so = {}) {
+        const a = Math.max(fx, X(xa)), b = Math.min(fx + fw, X(xb));
+        if (b > a) ops.push({ k: "rect", x: r1(a), y: r1(fy), w: r1(b - a), h: r1(fh), solid: so.alpha ?? 0.1, c: so.color || "accent", noStroke: true });
+        if (so.label) text((a + b) / 2, fy + fh - 6, so.label, { size: "s", color: so.color || "accent", align: "middle", halo: true });
+      },
+      text(x, y, str, so = {}) { text(X(x), clampY(Y(y)), str, so); },
+    };
+    return ax;
+  }
+
+  function bars(o) {
+    const vals = o.values || [], n = vals.length || 1;
+    const [bx, by, bw, bh] = o.at || [20, 10, W - 40, H - 40];
+    const max = o.max ?? Math.max(...vals.map(Math.abs), 1e-12), gap = Math.min(10, bw / n * 0.25);
+    const w = (bw - gap * (n - 1)) / n;
+    ops.push({ k: "path", pts: [P(bx - 4, by + bh), P(bx + bw + 4, by + bh)], c: "muted", sw: 1, dash: false });
+    vals.forEach((v, i) => {
+      const h = Math.max(0, Math.min(1, Math.abs(v) / max)) * bh, x = bx + i * (w + gap);
+      const hi = Array.isArray(o.highlight) ? o.highlight.includes(i) : o.highlight === i;
+      const c = o.colors?.[i] || (hi ? "accent" : "ink");
+      // Near-zero bars become a flat stroke: a sketchy box a few units tall reads as a blob.
+      if (h > 4) ops.push({ k: "rect", x: r1(x), y: r1(by + bh - h), w: r1(w), h: r1(h), fill: hi || !!o.fillAll, c });
+      else ops.push({ k: "path", pts: [P(x, by + bh - h), P(x + w, by + bh - h)], c, sw: 2.2, rough: 0.3, dash: false });
+      if (o.labels?.[i] != null) text(x + w / 2, by + bh + 13, o.labels[i], { size: "xs", color: "muted", align: "middle" });
+      if (o.showValues) text(x + w / 2, by + bh - h - 4, fmt(v, 2), { size: "xs", color: c === "ink" ? "muted" : c, align: "middle" });
+    });
+  }
+
+  function heatmap(o) {
+    const m = o.matrix || [[0]], rows = m.length, cols = m[0].length;
+    const [hx, hy, hw, hh] = o.at || [20, 10, W - 40, H - 30];
+    const flat = m.flat(), max = o.max ?? Math.max(...flat), min = o.min ?? Math.min(...flat, 0);
+    const cw = hw / cols, ch = hh / rows;
+    m.forEach((row, i) => row.forEach((v, j) => {
+      const a = max > min ? (v - min) / (max - min) : 0;
+      ops.push({ k: "rect", x: r1(hx + j * cw), y: r1(hy + i * ch), w: r1(cw), h: r1(ch), solid: 0.08 + 0.85 * Math.max(0, Math.min(1, a)),
+                 c: o.color || "accent", noStroke: true });
+    }));
+    ops.push({ k: "rect", x: r1(hx), y: r1(hy), w: r1(hw), h: r1(hh), c: "muted", sw: 1 });
+    (o.rowLabels || []).forEach((l, i) => text(hx - 4, hy + i * ch + ch / 2 + 3, l, { size: "xs", color: "muted", align: "end" }));
+    (o.colLabels || []).forEach((l, j) => text(hx + j * cw + cw / 2, hy + hh + 12, l, { size: "xs", color: "muted", align: "middle" }));
+  }
+
+  return Object.freeze({
+    W, H,
+    f16, bf16, f32: Math.fround, round, fmt, rng, softmax,
+    linspace: (a, b, n) => Array.from({ length: n }, (_, i) => a + (b - a) * i / (n - 1)),
+    logspace: (a, b, n) => Array.from({ length: n }, (_, i) => 10 ** (a + (b - a) * i / (n - 1))),
+    range: n => Array.from({ length: n }, (_, i) => i),
+    sum: xs => xs.reduce((a, b) => a + b, 0),
+    mean: xs => xs.reduce((a, b) => a + b, 0) / xs.length,
+    clamp: (v, a, b) => Math.min(b, Math.max(a, v)),
+    line: (x1, y1, x2, y2, o) => path([[x1, y1], [x2, y2]], o),
+    path,
+    arrow: (pts, o = {}) => { path(pts, o); const n = pts.length; if (n >= 2) ops.push({ k: "head", from: P(...pts[n - 2]), to: P(...pts[n - 1]), ...style(o) }); },
+    rect: (x, y, w, h, o = {}) => ops.push({ k: "rect", x: r1(x), y: r1(y), w: r1(w), h: r1(h), fill: !!o.fill, solid: o.alpha, ...style(o) }),
+    circle: (cx, cy, d, o = {}) => ops.push({ k: "circle", x: r1(cx), y: r1(cy), d, fill: !!o.fill, ...style(o) }),
+    text,
+    // A rectangle with a centred label that wraps to fit inside it.
+    box: (x, y, w, h, label = "", o = {}) => {
+      ops.push({ k: "rect", x: r1(x), y: r1(y), w: r1(w), h: r1(h), fill: !!o.fill, ...style(o) });
+      if (label !== "") text(x + w / 2, y + h / 2, label, { size: o.size || "s", align: "middle", valign: "middle",
+        maxWidth: Math.max(10, w - 10), color: o.textColor || "ink", halo: !!o.fill });
+    },
+    textWidth: (str, size = "s") => uni(str).length * (CHAR_W[size] || 6.4),
+    axes, bars, heatmap,
+    readout: (label, value, o = {}) => reads.push({ l: uni(label), v: typeof value === "number" ? fmt(value, o.digits ?? 3) : String(value), c: o.color || "ink" }),
+    __take: () => { const out = { ops, reads }; ops = []; reads = []; return out; },
+  });
+})();
+</script>
+
+<script type="text/plain" id="worker-boot">
+;(() => {
+  let state, ready = false;
+  self.onmessage = e => {
+    const { id, params } = e.data;
+    try {
+      if (!ready) { state = typeof setup === "function" ? setup(api) : undefined; ready = true; }
+      if (typeof draw !== "function") throw new Error("the code must define function draw(p, api, state)");
+      api.__take();
+      draw(Object.freeze({ ...params }), api, state);
+      self.postMessage({ id, ...api.__take() });
+    } catch (err) {
+      api.__take();
+      const m = String(err && err.stack || "").match(/:(\d+):\d+/);
+      self.postMessage({ id, error: (err && err.message) || String(err), line: m ? +m[1] : null });
+    }
+  };
+})();
+</script>
+
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+const cv = $("#cv"), ctx = cv.getContext("2d");
+let spec = null, theme = {}, worker = null, codeLine0 = 0, params = {}, last = null, seq = 0;
+let inflight = null, queued = null, fatal = null, playing = null;
+
+const post = m => parent.postMessage(m, "*");
+const reportSize = () => post({ type: "size", h: Math.ceil(document.body.getBoundingClientRect().height) + 2 });  // content, not viewport
+
+/* ---------- worker ---------- */
+function startWorker() {
+  if (worker) worker.terminate();
+  const rt = $("#worker-runtime").textContent.replace("__W__", "260").replace("__H__", String(spec.height));
+  codeLine0 = rt.split("\n").length;  // Beam's code starts on the next line
+  const src = rt + "\n" + spec.code + "\n" + $("#worker-boot").textContent;
+  worker = new Worker(URL.createObjectURL(new Blob([src], { type: "text/javascript" })));
+  fatal = null;
+  worker.onerror = ev => {  // syntax errors and top-level throws land here
+    ev.preventDefault();
+    fatal = `${ev.message}${ev.lineno ? ` (code line ${ev.lineno - codeLine0})` : ""}`;
+    if (inflight) { const f = inflight; inflight = null; clearTimeout(f.timer); f.resolve({ error: fatal }); }
+  };
+  worker.onmessage = ev => {
+    if (!inflight || ev.data.id !== inflight.id) return;
+    const f = inflight; inflight = null; clearTimeout(f.timer);
+    const d = ev.data;
+    if (d.error && d.line) d.error += ` (code line ${d.line - codeLine0})`;
+    f.resolve(d);
+  };
+}
+
+// One request at a time; a draw that runs past the limit kills the worker (infinite loops can't hang the page).
+function call(p, limit = 1500) {
+  return new Promise(resolve => {
+    if (fatal) return resolve({ error: fatal });
+    const id = ++seq;
+    const timer = setTimeout(() => {
+      inflight = null;
+      startWorker();
+      resolve({ error: `draw() took longer than ${limit} ms with these settings (too much work, or an endless loop)` });
+    }, limit);
+    inflight = { id, resolve, timer };
+    worker.postMessage({ id, params: p });
+  });
+}
+
+/* ---------- self-test: every control, at its extremes ---------- */
+const desc = (c, v) => `${c.label || c.id} = ${typeof v === "boolean" ? (v ? "on" : "off") : v}`;
+function variantsFor(c) {
+  if (c.type === "slider" || c.type === "time") return [c.min, c.max, (c.min + c.max) / 2];
+  if (c.type === "select") return c.options.filter(o => o !== c.value);
+  if (c.type === "toggle") return [!c.value];
+  return [];
+}
+const sig = r => JSON.stringify([r.ops, r.reads]);
+const nanShare = ops => {
+  const coords = ops.flatMap(o => o.pts ? o.pts.flat() : [o.x, o.y].filter(v => v !== undefined));
+  return coords.length ? coords.filter(v => !Number.isFinite(v)).length / coords.length : 1;
+};
+
+async function selfTest() {
+  const base = await call(params);
+  if (base.error) return `With the default settings: ${base.error}`;
+  if (base.ops.length < 3) return "With the default settings the toy draws almost nothing.";
+  if (nanShare(base.ops) > 0.2) return "With the default settings most coordinates are NaN or infinite.";
+  const layout = layoutProblem(base.ops);
+  if (layout) return `With the default settings, ${layout}`;
+  let checks = 1;
+  for (const c of spec.controls) {
+    let changed = false;
+    for (const v of variantsFor(c)) {
+      const r = await call({ ...params, [c.id]: v });
+      checks++;
+      if (r.error) return `With ${desc(c, v)}: ${r.error}`;
+      if (r.ops.length < 3) return `With ${desc(c, v)} the toy draws almost nothing.`;
+      if (nanShare(r.ops) > 0.2) return `With ${desc(c, v)} most coordinates are NaN or infinite.`;
+      if (sig(r) !== sig(base)) changed = true;
+    }
+    if (!changed) return `The control "${c.label || c.id}" has no visible effect: moving it changes neither the drawing nor any readout.`;
+  }
+  return { checks };
+}
+
+/* ---------- text layout (shared by rendering and the layout checks) ---------- */
+const SIZES = { xs: 10, s: 12.5, m: 15, l: 19 };
+const FONT = px => `${px}px Kalam, "Comic Sans MS", cursive`;
+const SUBS = Object.fromEntries([..."0123456789+-=()aehijklmnoprstuvx"].map((c, i) => [c, "₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎ₐₑₕᵢⱼₖₗₘₙₒₚᵣₛₜᵤᵥₓ"[i]]));
+// Exponents and subscripts Unicode can't express (e^{Sᵢⱼ − mᵢ}) are drawn raised/lowered at a smaller size.
+function segments(line, px) {
+  const out = [], re = /([\^_])(\{[^}]*\}|-?[A-Za-z0-9]+)/g;
+  let last = 0, m;
+  while ((m = re.exec(line))) {
+    if (m.index > last) out.push({ t: line.slice(last, m.index), px, dy: 0 });
+    const body = m[2].replace(/^\{|\}$/g, "").replace(/_([a-z0-9]+)/g, (w, b) => [...b].every(c => SUBS[c]) ? [...b].map(c => SUBS[c]).join("") : b);
+    out.push({ t: body, px: px * 0.7, dy: m[1] === "^" ? -px * 0.38 : px * 0.22 });
+    last = re.lastIndex;
+  }
+  if (last < line.length) out.push({ t: line.slice(last), px, dy: 0 });
+  for (const seg of out) { ctx.font = FONT(seg.px); seg.w = ctx.measureText(seg.t).width; }
+  return out;
+}
+const lineWidth = (line, px) => segments(line, px).reduce((a, g) => a + g.w, 0);
+
+function textLayout(o) {
+  const px = SIZES[o.size] || 12.5, lh = px * 1.18;
+  let lines = [o.s];
+  if (o.maxw) {
+    lines = [];
+    for (const word of o.s.split(/\s+/).filter(Boolean)) {
+      const last = lines[lines.length - 1];
+      if (last && lineWidth(last + " " + word, px) <= o.maxw) lines[lines.length - 1] = last + " " + word;
+      else lines.push(word);
+    }
+  }
+  const w = Math.max(0, ...lines.map(l => lineWidth(l, px)));
+  const leftOf = x => o.align === "middle" ? x - w / 2 : o.align === "end" ? x - w : x;
+  let x = o.x, y = o.valign === "middle" ? o.y - (lines.length * lh) / 2 + px * 0.8 : o.y;
+  if (!o.rot) {  // keep every label fully on the canvas: shift it inside instead of clipping it
+    x += Math.max(0, 2 - leftOf(x)) - Math.max(0, leftOf(x) + w - 258);
+    y = Math.min(spec.height - 3 - (lines.length - 1) * lh, Math.max(px * 0.8, y));
+  }
+  const l = leftOf(x);
+  return { lines, x, y, lh, px, box: { l, t: y - px * 0.8, r: l + w, b: y + (lines.length - 1) * lh + px * 0.25 } };
+}
+
+// Overlapping labels and drawings that use a sliver of the canvas both read badly; report them so Beam can fix them.
+function layoutProblem(ops) {
+  const texts = ops.filter(o => o.k === "text" && !o.rot && o.s.trim()).map(o => ({ s: o.s, b: textLayout(o).box }));
+  const area = b => Math.max(0, b.r - b.l) * Math.max(0, b.b - b.t);
+  for (let i = 0; i < texts.length; i++) for (let j = i + 1; j < texts.length; j++) {
+    const a = texts[i].b, b = texts[j].b;
+    const inter = Math.max(0, Math.min(a.r, b.r) - Math.max(a.l, b.l)) * Math.max(0, Math.min(a.b, b.b) - Math.max(a.t, b.t));
+    if (inter > 0.3 * Math.min(area(a), area(b)))
+      return `the labels "${texts[i].s}" and "${texts[j].s}" overlap near (${Math.round(a.l)}, ${Math.round(a.t)}). Move one, shorten it, or give it room.`;
+  }
+  const xs = [], ys = [];
+  for (const o of ops) {
+    if (o.pts) o.pts.forEach(([x, y]) => { xs.push(x); ys.push(y); });
+    else if (o.k === "rect") { xs.push(o.x, o.x + o.w); ys.push(o.y, o.y + o.h); }
+    else if (o.k === "circle") { xs.push(o.x - o.d / 2, o.x + o.d / 2); ys.push(o.y - o.d / 2, o.y + o.d / 2); }
+  }
+  texts.forEach(t => { xs.push(t.b.l, t.b.r); ys.push(t.b.t, t.b.b); });
+  const bw = Math.max(...xs) - Math.min(...xs), bh = Math.max(...ys) - Math.min(...ys);
+  if (bw * bh < 0.3 * 260 * spec.height)
+    return `the drawing only fills ${Math.round(bw)}×${Math.round(bh)} of the 260×${spec.height} canvas. Scale the layout up to use most of the width, and set "height" to fit it.`;
+  return null;
+}
+
+/* ---------- rendering ---------- */
+const col = c => theme[c] || theme.ink;
+
+function fit() {
+  const scale = cv.clientWidth / 260, dpr = window.devicePixelRatio || 1;
+  cv.style.height = spec.height * scale + "px";
+  cv.width = Math.round(cv.clientWidth * dpr); cv.height = Math.round(spec.height * scale * dpr);
+  ctx.setTransform(dpr * scale, 0, 0, dpr * scale, 0, 0);
+}
+
+function render(r) {
+  if (!r || r.error) return;
+  last = r;
+  fit();
+  ctx.clearRect(0, 0, 260, spec.height);
+  const rc = rough.canvas(cv);
+  r.ops.forEach((o, i) => {
+    // Data curves and dashed guides get a single stroke: the double sketch stroke reads as two lines there.
+    const single = o.dash || (o.rough ?? 0.9) < 0.5;
+    const base = { seed: i + 3, stroke: col(o.c), strokeWidth: o.sw || 1.4, roughness: o.crisp ? 0 : (o.rough ?? 0.9),
+                   bowing: o.crisp ? 0 : 0.8, disableMultiStroke: single, ...(o.dash ? { strokeLineDash: [5, 4] } : {}) };
+    if (o.k === "path") o.smooth && o.pts.length > 2 ? rc.curve(o.pts, base) : rc.linearPath(o.pts, base);
+    else if (o.k === "head") {
+      const [ax, ay] = o.from, [bx, by] = o.to, a = Math.atan2(by - ay, bx - ax);
+      const wing = d => [bx - 8 * Math.cos(a + d), by - 8 * Math.sin(a + d)];
+      rc.linearPath([wing(0.45), [bx, by], wing(-0.45)], { ...base, strokeLineDash: undefined });
+    } else if (o.k === "rect") {
+      if (o.solid != null) {
+        ctx.save(); ctx.globalAlpha = o.solid; ctx.fillStyle = col(o.c); ctx.fillRect(o.x, o.y, o.w, o.h); ctx.restore();
+        if (!o.noStroke) rc.rectangle(o.x, o.y, o.w, o.h, base);
+      } else rc.rectangle(o.x, o.y, o.w, o.h, o.fill ? { ...base, fill: col(o.c), fillStyle: "hachure", hachureGap: 4, fillWeight: 0.7 } : base);
+    } else if (o.k === "circle") {
+      rc.circle(o.x, o.y, o.d, o.fill ? { ...base, roughness: 0.4, fill: col(o.c), fillStyle: "solid" } : base);
+    } else if (o.k === "text") {
+      const L = textLayout(o);
+      ctx.save();
+      ctx.textAlign = "left";
+      ctx.translate(L.x, L.y); if (o.rot) ctx.rotate(o.rot * Math.PI / 180);
+      L.lines.forEach((line, k) => {
+        const segs = segments(line, L.px), w = segs.reduce((a, g) => a + g.w, 0);
+        let x = o.align === "middle" ? -w / 2 : o.align === "end" ? -w : 0;
+        for (const g of segs) {
+          ctx.font = FONT(g.px);
+          if (o.halo) { ctx.lineWidth = 3.5; ctx.strokeStyle = theme.bg; ctx.lineJoin = "round"; ctx.strokeText(g.t, x, k * L.lh + g.dy); }
+          ctx.fillStyle = col(o.c); ctx.fillText(g.t, x, k * L.lh + g.dy);
+          x += g.w;
+        }
+      });
+      ctx.restore();
+    }
+  });
+  const sci = v => v.replace(/^(-?[\d.]+)e([+-]\d+)$/, (_, m, e) => `${m}×10<sup>${+e}</sup>`);
+  $("#reads").innerHTML = r.reads.map(x => `<div class="l">${esc(x.l)}</div><div class="v" style="color:${col(x.c)}">${sci(esc(x.v))}</div>`).join("");
+  reportSize();
+}
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+// Latest-wins redraw: while a draw is running, only the newest settings are kept.
+async function redraw() {
+  if (inflight) { queued = true; return; }
+  const r = await call(params, 2500);
+  if (r.error) { $("#msg").style.display = "block"; $("#msg").textContent = r.error; reportSize(); }
+  else { $("#msg").style.display = "none"; render(r); }
+  if (queued) { queued = false; redraw(); }
+}
+
+/* ---------- controls ---------- */
+const fmtVal = (c, v) => c.type === "toggle" ? "" : typeof v === "number" ? +v.toFixed(Math.max(0, -Math.floor(Math.log10(c.step || 1)))) : v;
+
+function buildControls() {
+  const box = $("#ctrls"); box.innerHTML = "";
+  for (const c of spec.controls) {
+    const el = document.createElement("div");
+    if (c.type === "slider") {
+      el.innerHTML = `<div class="c-head"><span class="c-lab">${esc(c.label)}</span><span class="c-val"></span></div><input type="range">`;
+      const inp = el.querySelector("input"), val = el.querySelector(".c-val");
+      Object.assign(inp, { min: c.min, max: c.max, step: c.step, value: params[c.id] });
+      val.textContent = fmtVal(c, params[c.id]);
+      inp.addEventListener("input", () => { params[c.id] = +inp.value; val.textContent = fmtVal(c, params[c.id]); redraw(); });
+    } else if (c.type === "select") {
+      el.innerHTML = `<div class="c-lab">${esc(c.label)}</div><div class="seg"></div>`;
+      const seg = el.querySelector(".seg");
+      c.options.forEach(opt => {
+        const b = document.createElement("button"); b.textContent = opt;
+        b.className = params[c.id] === opt ? "on" : "";
+        b.addEventListener("click", () => { params[c.id] = opt; seg.querySelectorAll("button").forEach(x => x.className = x === b ? "on" : ""); redraw(); });
+        seg.appendChild(b);
+      });
+    } else if (c.type === "toggle") {
+      el.className = "tog" + (params[c.id] ? " on" : "");
+      el.innerHTML = `<span class="sw"></span><span class="c-lab">${esc(c.label)}</span>`;
+      el.addEventListener("click", () => { params[c.id] = !params[c.id]; el.classList.toggle("on", params[c.id]); redraw(); });
+    } else if (c.type === "time") {
+      el.innerHTML = `<div class="c-head"><span class="c-lab">${esc(c.label)}</span><span class="c-val"></span></div>
+        <div class="time"><button aria-label="Play">▶</button><input type="range"></div>`;
+      const inp = el.querySelector("input"), val = el.querySelector(".c-val"), btn = el.querySelector("button");
+      Object.assign(inp, { min: c.min, max: c.max, step: c.step, value: params[c.id] });
+      val.textContent = fmtVal(c, params[c.id]);
+      const set = v => { params[c.id] = v; inp.value = v; val.textContent = fmtVal(c, v); redraw(); };
+      inp.addEventListener("input", () => { stop(); set(+inp.value); });
+      const stop = () => { if (playing) cancelAnimationFrame(playing.raf); playing = null; btn.textContent = "▶"; };
+      btn.addEventListener("click", () => {
+        if (playing) return stop();
+        if (params[c.id] >= c.max) set(c.min);
+        btn.textContent = "❚❚";
+        const steps = (c.max - c.min) / c.step, perFrame = Math.max(1, Math.round(steps / (60 * (c.seconds || 4))));
+        const tick = () => {
+          if (!inflight) {
+            const v = Math.min(c.max, params[c.id] + perFrame * c.step);
+            set(+v.toFixed(10));
+            if (v >= c.max) return stop();
+          }
+          playing = { raf: requestAnimationFrame(tick) };
+        };
+        playing = { raf: requestAnimationFrame(tick) };
+      });
+    }
+    box.appendChild(el);
+  }
+}
+
+/* ---------- protocol with the reader page ---------- */
+function applyTheme(t) {
+  theme = t;
+  for (const [k, v] of Object.entries(t)) document.documentElement.style.setProperty("--" + k, v);
+  document.documentElement.style.colorScheme = t.scheme || "light";
+}
+
+window.addEventListener("message", async e => {
+  if (e.source !== parent) return;
+  const m = e.data || {};
+  if (m.type === "theme") { applyTheme(m.theme); render(last); return; }
+  if (m.type !== "load") return;
+  spec = m.spec; applyTheme(m.theme);
+  params = Object.fromEntries(spec.controls.map(c => [c.id, c.value]));
+  if (playing) cancelAnimationFrame(playing.raf), playing = null;
+  try { startWorker(); } catch (err) { post({ type: "tested", ok: false, error: "Couldn't start the sandbox: " + err.message }); return; }
+  await document.fonts.load("12px Kalam").catch(() => {});
+  if (m.test) {
+    const res = await selfTest();
+    if (typeof res === "string") { post({ type: "tested", ok: false, error: res }); return; }
+    post({ type: "tested", ok: true, checks: res.checks });
+  }
+  buildControls();
+  await redraw();
+  if (m.autoplay) document.querySelector(".time button")?.click();
+});
+new ResizeObserver(() => { if (last) render(last); }).observe(document.body);
+post({ type: "hello" });
+</script>
+</body>
+</html>
