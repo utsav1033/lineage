@@ -126,15 +126,23 @@ def _html_to_paper(arxiv_id: str, html: str, base_url: str = "") -> Paper:
     return Paper(arxiv_id, title, text, refs, mathml, figures)
 
 
-def arxiv_title(arxiv_id: str) -> str | None:
-    """The paper's title from arXiv's metadata API (the PDF's first line is often a header or affiliation)."""
+def arxiv_meta(arxiv_id: str) -> dict:
+    """Title and latest version number from arXiv's metadata API."""
     def load():
         _arxiv_wait()
         r = requests.get(f"https://export.arxiv.org/api/query?id_list={arxiv_id}", headers=UA, timeout=30)
         entry = BeautifulSoup(r.text, "html.parser").find("entry")
-        t = entry and entry.find("title")
-        return {"title": " ".join(t.get_text().split())} if t else {}
-    return (_cached(f"meta:{arxiv_id}", load) or {}).get("title")
+        if not entry:
+            return {}
+        t, eid = entry.find("title"), entry.find("id")
+        v = re.search(r"v(\d+)$", eid.get_text().strip()) if eid else None
+        return {"title": " ".join(t.get_text().split()) if t else None, "version": int(v.group(1)) if v else 1}
+    return _cached(f"meta2:{arxiv_id}", load) or {}
+
+
+def arxiv_title(arxiv_id: str) -> str | None:
+    """The paper's title (the PDF's first line is often a header or affiliation)."""
+    return arxiv_meta(arxiv_id).get("title")
 
 
 def _pdf_paragraphs(text: str) -> list[str]:
@@ -169,12 +177,20 @@ def _pdf_to_paper(arxiv_id: str) -> Paper | None:
 
 
 def fetch_paper(arxiv_id: str) -> Paper | None:
-    def load():
-        r = requests.get(f"https://arxiv.org/html/{arxiv_id}", headers=UA, timeout=60)
+    def html(version: str = "") -> Paper | None:
+        r = requests.get(f"https://arxiv.org/html/{arxiv_id}{version}", headers=UA, timeout=60)
         p = _html_to_paper(arxiv_id, r.text, r.url) if r.status_code == 200 and "ltx_document" in r.text else None
-        # Some "HTML" versions only embed the PDF ("See pages 1-last of …"): fall back to the PDF's text.
-        if not p or len(p.text) < 3000:
-            p = _pdf_to_paper(arxiv_id) or p
+        return p if p and len(p.text) >= 3000 else None  # some "HTML" pages only embed the PDF
+
+    def load():
+        p = html()
+        if not p:
+            # arXiv builds HTML per version and a fresh revision can lag behind: use the newest earlier
+            # version that has HTML before settling for the PDF's text (which garbles math).
+            for v in range(arxiv_meta(arxiv_id).get("version", 1), 0, -1):
+                if p := html(f"v{v}"):
+                    break
+        p = p or _pdf_to_paper(arxiv_id)
         return p.__dict__ if p else None
 
     d = _cached(f"paper:{arxiv_id}", load)
